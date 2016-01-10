@@ -23,7 +23,8 @@ var requestContext = {
   requestHandler:function(req, res){
     var chunks = [];
     req.on('data', function(chunk){
-      chunks.push(chunk);
+      // ignore eol on sample files.
+      chunks.push(chunk.toString().replace(/\r?\n$/m, ''));
     });
     req.on('end', function(){
       if(!requestContext.expectedRequest)return res.end(requestContext.responseToSend);
@@ -34,31 +35,6 @@ var requestContext = {
       requestContext.responseToSend = null;
     });
   }
-};
-
-var origRandom = Math.random;
-module.exports = {
-  before:function(done){
-    timekeeper.freeze(Date.parse('2014-10-12T01:02:03Z'));
-    Math.random = function() { return 1; };
-    server = http.createServer(requestContext.requestHandler);
-    server.listen(0, function(e){
-      if(e)return done(e);
-      port = server.address().port;
-      done();
-    });
-  },
-  beforeEach:function(){
-    requestContext.expectedRequest = null;
-    requestContext.responseToSend = null;
-    requestContext.doneHandler = null;
-  },
-  after:function(){
-    timekeeper.reset();
-    Math.random = origRandom;
-    server.close();
-  },
-  'Request Response Sampling':suite
 };
 
 tests.forEach(function(test){
@@ -119,8 +95,8 @@ tests.forEach(function(test){
 
 function generateTest(name, methodName, wsdlPath, headerJSON, securityJSON, requestXML, requestJSON, responseXML, responseJSON, responseSoapHeaderJSON, wsdlOptions, options){
   suite[name] = function(done){
-    if(requestXML)requestContext.expectedRequest = requestXML;
-    if(responseXML)requestContext.responseToSend = responseXML;
+    if(requestXML) requestContext.expectedRequest = requestXML;
+    if(responseXML) requestContext.responseToSend = responseXML;
     requestContext.doneHandler = done;
     soap.createClient(wsdlPath, wsdlOptions, function(err, client){
       if (headerJSON) {
@@ -129,15 +105,16 @@ function generateTest(name, methodName, wsdlPath, headerJSON, securityJSON, requ
         }
       }
       if (securityJSON && securityJSON.type === 'ws') {
-        client.setSecurity(new WSSecurity(securityJSON.username, securityJSON.password));
+        client.setSecurity(new WSSecurity(securityJSON.username, securityJSON.password, securityJSON.options));
       }
       client[methodName](requestJSON, function(err, json, body, soapHeader){
         if(requestJSON){
           if (err) {
+            assert.notEqual('undefined: undefined', err.message);
             assert.deepEqual(err.root, responseJSON);
           } else {
             // assert.deepEqual(json, responseJSON);
-            assert.equal(JSON.stringify(json), JSON.stringify(responseJSON));
+            assert.equal(JSON.stringify(typeof json === 'undefined' ? null : json), JSON.stringify(responseJSON));
             if(responseSoapHeaderJSON){
               assert.equal(JSON.stringify(soapHeader), JSON.stringify(responseSoapHeaderJSON));
             }
@@ -148,3 +125,34 @@ function generateTest(name, methodName, wsdlPath, headerJSON, securityJSON, requ
     }, 'http://localhost:'+port+'/Message/Message.dll?Handler=Default');
   };
 }
+
+describe('Request Response Sampling', function() {
+  var origRandom = Math.random;
+
+  before(function(done){
+    timekeeper.freeze(Date.parse('2014-10-12T01:02:03Z'));
+    Math.random = function() { return 1; };
+    server = http.createServer(requestContext.requestHandler);
+    server.listen(0, function(e){
+      if(e)return done(e);
+      port = server.address().port;
+      done();
+    });
+  });
+
+  beforeEach(function(){
+    requestContext.expectedRequest = null;
+    requestContext.responseToSend = null;
+    requestContext.doneHandler = null;
+  });
+
+  after(function(){
+    timekeeper.reset();
+    Math.random = origRandom;
+    server.close();
+  });
+
+  Object.keys(suite).map(function(key) {
+    it(key, suite[key]);
+  });
+});
